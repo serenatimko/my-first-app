@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Payment Calculator</title>
+  <style>
+    body {
+      font-family: -apple-system, Helvetica, Arial, sans-serif;
+      max-width: 480px;
+      margin: 40px auto;
+      padding: 0 20px;
+      background: #eef2fa;
+      color: #14213d;
+    }
+    h1 { font-size: 28px; }
+    label { display: block; margin: 16px 0; font-weight: 600; }
+    input, select {
+      display: block;
+      width: 100%;
+      box-sizing: border-box;
+      margin-top: 6px;
+      padding: 10px;
+      font-size: 16px;
+      border: 1px solid #c5cee0;
+      border-radius: 8px;
+    }
+    input:disabled { background: #e1e6f1; color: #5b6783; }
+    .row { display: flex; gap: 8px; }
+    .row input { flex: 1; }
+    .row select { width: 80px; }
+    small { display: block; margin-top: 6px; font-weight: 400; color: #4b5876; }
+    button {
+      background: #3b5bdb;
+      color: white;
+      border: 0;
+      padding: 12px 24px;
+      font-size: 16px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    button.small { padding: 6px 12px; font-size: 14px; }
+    button.ghost { background: white; color: #3b5bdb; border: 1px solid #c5cee0; }
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+    h2 { font-size: 20px; margin-top: 32px; }
+    #saved { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; }
+    #saved li { background: white; border-radius: 12px; padding: 12px 14px; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+    #saved .info { line-height: 1.4; }
+    #saved .info span { display: block; font-size: 14px; color: #4b5876; }
+    #savemsg { margin: 8px 0 0; font-size: 14px; color: #1f8a63; min-height: 1.2em; }
+    #result {
+      margin-top: 24px;
+      padding: 16px;
+      background: white;
+      border-radius: 12px;
+      line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+  <h1>Mortgage Payment Calculator</h1>
+
+  <label>Loan type
+    <select id="type">
+      <option value="conv">Conventional / VA</option>
+      <option value="fha">FHA</option>
+      <option value="usda">USDA</option>
+    </select>
+    <small id="typenote"></small>
+  </label>
+
+  <label>Home price
+    <input id="price" type="number" value="350000">
+  </label>
+
+  <label>Down payment
+    <div class="row">
+      <input id="down" type="number" step="0.01" value="20">
+      <select id="downmode">
+        <option value="pct">%</option>
+        <option value="usd">$</option>
+      </select>
+    </div>
+    <small id="downhint"></small>
+  </label>
+
+  <label>Interest rate (%)
+    <input id="rate" type="number" step="0.125" value="6.5">
+  </label>
+
+  <label>Loan term
+    <select id="years">
+      <option value="30">30 years</option>
+      <option value="15">15 years</option>
+    </select>
+  </label>
+
+  <label>Yearly property tax
+    <input id="tax" type="number" value="4200">
+  </label>
+
+  <label>Yearly home insurance
+    <input id="ins" type="number" value="1400">
+  </label>
+
+  <label><span id="milabel">Mortgage insurance, % of loan per year (optional)</span>
+    <input id="mi" type="number" step="0.01" value="0">
+  </label>
+
+  <label>Name for saving (optional)
+    <input id="name" type="text" placeholder="Example: Smith, FHA">
+  </label>
+
+  <div class="actions">
+    <button id="go">Calculate</button>
+    <button id="save" class="ghost">Save this scenario</button>
+  </div>
+  <p id="savemsg"></p>
+
+  <p id="result">Your payment will show up here.</p>
+
+  <h2>Saved scenarios</h2>
+  <ul id="saved"></ul>
+  <small>Saved only in this browser on this Mac. Nothing is uploaded.</small>
+
+  <script>
+    // upfront = % of the base loan added to the loan, annual = % of the base loan per year
+    var LOAN_TYPES = {
+      conv: { upfront: 0, annual: null, note: "No upfront fee. Use the mortgage insurance box below if the down payment is under 20%." },
+      fha:  { upfront: 1.75, annual: 0.55, note: "Upfront MIP 1.75% (added to the loan) and 0.55% mortgage insurance per year." },
+      usda: { upfront: 1.00, annual: 0.35, note: "Upfront guarantee fee 1.00% (added to the loan) and 0.35% mortgage insurance per year." }
+    };
+    var lastMode = "pct";
+
+    function el(id) { return document.getElementById(id); }
+
+    function money(x) {
+      return x.toLocaleString("en-US", { style: "currency", currency: "USD" });
+    }
+
+    // Turns the down payment box into dollars and percent, whichever way it was typed
+    function getDown() {
+      var price = Number(el("price").value);
+      var value = Number(el("down").value);
+      var cash = el("downmode").value === "pct" ? price * value / 100 : value;
+      var pct = price > 0 ? cash / price * 100 : 0;
+      return { cash: cash, pct: pct };
+    }
+
+    function updateHint() {
+      var d = getDown();
+      el("downhint").textContent = "= " + money(d.cash) + " (" + d.pct.toFixed(2) + "% down)";
+    }
+
+    function changeMode() {
+      var mode = el("downmode").value;
+      if (mode !== lastMode) {
+        // work out the old value using the OLD mode, then show it in the new mode
+        var price = Number(el("price").value);
+        var value = Number(el("down").value);
+        var cash = lastMode === "pct" ? price * value / 100 : value;
+        var pct = price > 0 ? cash / price * 100 : 0;
+        var newValue = mode === "pct" ? pct : cash;
+        el("down").value = String(Math.round(newValue * 100) / 100);
+        lastMode = mode;
+      }
+      updateHint();
+    }
+
+    function updateType() {
+      var t = LOAN_TYPES[el("type").value];
+      el("typenote").textContent = t.note;
+      if (t.annual === null) {
+        if (el("mi").disabled) { el("mi").value = 0; }
+        el("mi").disabled = false;
+        el("milabel").textContent = "Mortgage insurance, % of loan per year (optional)";
+      } else {
+        el("mi").value = t.annual;
+        el("mi").disabled = true;
+        el("milabel").textContent = "Mortgage insurance, % of loan per year (set by loan type)";
+      }
+    }
+
+    // Does the math. Returns an object with the numbers, or a text message if something is wrong.
+    function compute() {
+      var t = LOAN_TYPES[el("type").value];
+      var price = Number(el("price").value);
+      var down = getDown();
+      var rate = Number(el("rate").value);
+      var years = Number(el("years").value);
+
+      var baseLoan = price - down.cash;
+      if (!(price > 0) || !(baseLoan > 0) || down.cash < 0) {
+        return "Check your numbers: the down payment must be less than the price.";
+      }
+
+      var upfront = baseLoan * t.upfront / 100;
+      var loan = baseLoan + upfront;
+      var monthlyRate = rate / 100 / 12;
+      var months = years * 12;
+
+      var payment;
+      if (monthlyRate === 0) {
+        payment = loan / months;
+      } else {
+        payment = loan * monthlyRate / (1 - Math.pow(1 + monthlyRate, -months));
+      }
+
+      var tax = Number(el("tax").value) / 12;
+      var ins = Number(el("ins").value) / 12;
+      var miRate = t.annual === null ? Number(el("mi").value) : t.annual;
+      var mi = baseLoan * miRate / 100 / 12;
+
+      return { payment: payment, tax: tax, ins: ins, mi: mi, total: payment + tax + ins + mi,
+               down: down, baseLoan: baseLoan, upfront: upfront, loan: loan };
+    }
+
+    function calculate() {
+      var r = compute();
+      if (typeof r === "string") {
+        el("result").textContent = r;
+        return;
+      }
+
+      var html =
+        "Total monthly payment: <strong>" + money(r.total) + "</strong><br><br>" +
+        "Principal and interest: " + money(r.payment) + "<br>" +
+        "Property tax: " + money(r.tax) + "<br>" +
+        "Home insurance: " + money(r.ins) + "<br>";
+      if (r.mi > 0) {
+        html += "Mortgage insurance: " + money(r.mi) + "<br>";
+      }
+      html += "<br>Down payment: " + money(r.down.cash) + " (" + r.down.pct.toFixed(2) + "%)<br>" +
+        "Base loan: " + money(r.baseLoan) + "<br>";
+      if (r.upfront > 0) {
+        html += "Upfront fee added to loan: " + money(r.upfront) + "<br>";
+      }
+      html += "Total loan amount: " + money(r.loan);
+
+      el("result").innerHTML = html;
+    }
+
+    // ---- Saving scenarios (kept in this browser only) ----
+    var STORE_KEY = "paymentCalculatorSaved";
+    var FIELDS = ["type", "price", "down", "downmode", "rate", "years", "tax", "ins", "mi"];
+    var TYPE_NAMES = { conv: "Conventional / VA", fha: "FHA", usda: "USDA" };
+
+    function readSaved() {
+      try { return JSON.parse(localStorage.getItem(STORE_KEY)) || []; } catch (e) { return []; }
+    }
+
+    function writeSaved(list) {
+      try { localStorage.setItem(STORE_KEY, JSON.stringify(list)); return true; } catch (e) { return false; }
+    }
+
+    function saveScenario() {
+      var r = compute();
+      if (typeof r === "string") {
+        el("savemsg").style.color = "#b42318";
+        el("savemsg").textContent = "Fix the numbers first, then save.";
+        return;
+      }
+      var item = { id: Date.now(), total: r.total, savedOn: new Date().toLocaleDateString() };
+      FIELDS.forEach(function (f) { item[f] = el(f).value; });
+      var typed = el("name").value.trim();
+      item.name = typed || (TYPE_NAMES[item.type] + ", " + money(Number(item.price)));
+
+      var list = readSaved();
+      list.unshift(item);
+      var ok = writeSaved(list);
+      el("savemsg").style.color = ok ? "#1f8a63" : "#b42318";
+      el("savemsg").textContent = ok ? "Saved." : "This browser would not save it. Try opening the file in Chrome.";
+      el("name").value = "";
+      renderSaved();
+    }
+
+    function loadScenario(id) {
+      var item = readSaved().filter(function (s) { return s.id === id; })[0];
+      if (!item) { return; }
+      el("type").value = item.type;
+      updateType();
+      el("downmode").value = item.downmode;
+      lastMode = item.downmode;
+      FIELDS.forEach(function (f) {
+        if (f === "type" || f === "downmode") { return; }
+        if (f === "mi" && LOAN_TYPES[item.type].annual !== null) { return; }
+        el(f).value = item[f];
+      });
+      updateHint();
+      calculate();
+      el("savemsg").style.color = "#1f8a63";
+      el("savemsg").textContent = "Loaded " + item.name + ".";
+    }
+
+    function deleteScenario(id) {
+      writeSaved(readSaved().filter(function (s) { return s.id !== id; }));
+      renderSaved();
+    }
+
+    function renderSaved() {
+      var ul = el("saved");
+      ul.innerHTML = "";
+      var list = readSaved();
+      if (list.length === 0) {
+        var empty = document.createElement("li");
+        empty.textContent = "Nothing saved yet.";
+        ul.appendChild(empty);
+        return;
+      }
+      list.forEach(function (s) {
+        var li = document.createElement("li");
+        var info = document.createElement("div");
+        info.className = "info";
+        var name = document.createElement("strong");
+        name.textContent = s.name;
+        var detail = document.createElement("span");
+        detail.textContent = money(s.total) + " per month, saved " + s.savedOn;
+        info.appendChild(name);
+        info.appendChild(detail);
+
+        var buttons = document.createElement("div");
+        buttons.className = "actions";
+        var load = document.createElement("button");
+        load.className = "small";
+        load.textContent = "Load";
+        load.addEventListener("click", function () { loadScenario(s.id); });
+        var del = document.createElement("button");
+        del.className = "small ghost";
+        del.textContent = "Delete";
+        del.addEventListener("click", function () { deleteScenario(s.id); });
+        buttons.appendChild(load);
+        buttons.appendChild(del);
+
+        li.appendChild(info);
+        li.appendChild(buttons);
+        ul.appendChild(li);
+      });
+    }
+
+    el("go").addEventListener("click", calculate);
+    el("save").addEventListener("click", saveScenario);
+    el("type").addEventListener("change", updateType);
+    el("downmode").addEventListener("change", changeMode);
+    el("down").addEventListener("input", updateHint);
+    el("price").addEventListener("input", updateHint);
+    updateType();
+    updateHint();
+    renderSaved();
+  </script>
+</body>
+</html>
