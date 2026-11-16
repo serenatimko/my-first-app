@@ -11,6 +11,7 @@
       background: #eef2fa;
       color: #14213d;
     }
+    [hidden] { display: none !important; }
     h1 { font-size: 28px; }
     label { display: block; margin: 16px 0; font-weight: 600; }
     input, select {
@@ -46,6 +47,7 @@
     #saved .info { line-height: 1.4; }
     #saved .info span { display: block; font-size: 14px; color: #4b5876; }
     #savemsg { margin: 8px 0 0; font-size: 14px; color: #1f8a63; min-height: 1.2em; }
+    .disclaimer { margin-top: 28px; font-size: 13px; line-height: 1.5; }
     #result {
       margin-top: 24px;
       padding: 16px;
@@ -60,11 +62,20 @@
 
   <label>Loan type
     <select id="type">
-      <option value="conv">Conventional / VA</option>
+      <option value="conv">Conventional</option>
+      <option value="va">VA</option>
       <option value="fha">FHA</option>
       <option value="usda">USDA</option>
     </select>
     <small id="typenote"></small>
+  </label>
+
+  <label id="valabel" hidden>VA funding fee
+    <select id="vause">
+      <option value="first">First use of VA loan</option>
+      <option value="subsequent">Subsequent use</option>
+      <option value="exempt">Exempt (disability or Purple Heart)</option>
+    </select>
   </label>
 
   <label>Home price
@@ -119,12 +130,15 @@
 
   <h2>Saved scenarios</h2>
   <ul id="saved"></ul>
-  <small>Saved only in this browser on this Mac. Nothing is uploaded.</small>
+  <small>Saved only in this browser. Nothing is uploaded.</small>
+
+  <small class="disclaimer">For illustration only. This is not a loan offer, commitment or rate quote. Your actual payment, fees and mortgage insurance will vary.</small>
 
   <script>
     // upfront = % of the base loan added to the loan, annual = % of the base loan per year
     var LOAN_TYPES = {
       conv: { upfront: 0, annual: null, note: "No upfront fee. Use the mortgage insurance box below if the down payment is under 20%." },
+      va:   { upfront: null, annual: 0, note: "No monthly mortgage insurance. The funding fee is added to the loan and depends on the down payment and first or subsequent use." },
       fha:  { upfront: 1.75, annual: 0.55, note: "Upfront MIP 1.75% (added to the loan) and 0.55% mortgage insurance per year." },
       usda: { upfront: 1.00, annual: 0.35, note: "Upfront guarantee fee 1.00% (added to the loan) and 0.35% mortgage insurance per year." }
     };
@@ -168,6 +182,7 @@
     function updateType() {
       var t = LOAN_TYPES[el("type").value];
       el("typenote").textContent = t.note;
+      el("valabel").hidden = el("type").value !== "va";
       if (t.annual === null) {
         if (el("mi").disabled) { el("mi").value = 0; }
         el("mi").disabled = false;
@@ -177,6 +192,14 @@
         el("mi").disabled = true;
         el("milabel").textContent = "Mortgage insurance, % of loan per year (set by loan type)";
       }
+    }
+
+    // VA purchase loan funding fee: 2.15% / 3.3% under 5% down, 1.5% at 5% or more, 1.25% at 10% or more
+    function vaFeePercent(downPct, use) {
+      if (use === "exempt") { return 0; }
+      if (downPct >= 10 - 0.000001) { return 1.25; }
+      if (downPct >= 5 - 0.000001) { return 1.5; }
+      return use === "subsequent" ? 3.3 : 2.15;
     }
 
     // Does the math. Returns an object with the numbers, or a text message if something is wrong.
@@ -192,7 +215,8 @@
         return "Check your numbers: the down payment must be less than the price.";
       }
 
-      var upfront = baseLoan * t.upfront / 100;
+      var upfrontPct = el("type").value === "va" ? vaFeePercent(down.pct, el("vause").value) : t.upfront;
+      var upfront = baseLoan * upfrontPct / 100;
       var loan = baseLoan + upfront;
       var monthlyRate = rate / 100 / 12;
       var months = years * 12;
@@ -210,7 +234,7 @@
       var mi = baseLoan * miRate / 100 / 12;
 
       return { payment: payment, tax: tax, ins: ins, mi: mi, total: payment + tax + ins + mi,
-               down: down, baseLoan: baseLoan, upfront: upfront, loan: loan };
+               down: down, baseLoan: baseLoan, upfront: upfront, upfrontPct: upfrontPct, loan: loan };
     }
 
     function calculate() {
@@ -231,7 +255,7 @@
       html += "<br>Down payment: " + money(r.down.cash) + " (" + r.down.pct.toFixed(2) + "%)<br>" +
         "Base loan: " + money(r.baseLoan) + "<br>";
       if (r.upfront > 0) {
-        html += "Upfront fee added to loan: " + money(r.upfront) + "<br>";
+        html += "Upfront fee (" + r.upfrontPct + "%) added to loan: " + money(r.upfront) + "<br>";
       }
       html += "Total loan amount: " + money(r.loan);
 
@@ -240,8 +264,8 @@
 
     // ---- Saving scenarios (kept in this browser only) ----
     var STORE_KEY = "paymentCalculatorSaved";
-    var FIELDS = ["type", "price", "down", "downmode", "rate", "years", "tax", "ins", "mi"];
-    var TYPE_NAMES = { conv: "Conventional / VA", fha: "FHA", usda: "USDA" };
+    var FIELDS = ["type", "vause", "price", "down", "downmode", "rate", "years", "tax", "ins", "mi"];
+    var TYPE_NAMES = { conv: "Conventional", va: "VA", fha: "FHA", usda: "USDA" };
 
     function readSaved() {
       try { return JSON.parse(localStorage.getItem(STORE_KEY)) || []; } catch (e) { return []; }
@@ -280,7 +304,7 @@
       el("downmode").value = item.downmode;
       lastMode = item.downmode;
       FIELDS.forEach(function (f) {
-        if (f === "type" || f === "downmode") { return; }
+        if (f === "type" || f === "downmode" || item[f] === undefined) { return; }
         if (f === "mi" && LOAN_TYPES[item.type].annual !== null) { return; }
         el(f).value = item[f];
       });
